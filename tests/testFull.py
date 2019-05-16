@@ -6,4 +6,4 @@ documents = [open("/home/s150789/OP00575V_1_29012008.txt", "r").read().lower().s
 
 print(documents)
 
-svd2vec.svd2vec(documents, window=5, window_weight=svd2vec.svd2vec.WINDOW_WEIGHT_WORD2VEC)
+svd2vec.svd2vec(documents, window=5, dyn_window_weight=svd2vec.svd2vec.WINDOW_WEIGHT_WORD2VEC)
