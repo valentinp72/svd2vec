@@ -7,7 +7,17 @@ from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import svds
 from scipy.spatial.distance import cosine
 
+import heapq
 from collections import OrderedDict, Counter
+from operator import itemgetter
+
+import bz2
+import pickle
+
+import multiprocessing
+import tempfile
+from numba import jit
+from joblib import Parallel, delayed
 
 class Utils:
 
@@ -46,6 +56,19 @@ class Utils:
         weight = 1.0 * windowSize / dist
         return (word, context, weight)
 
+    def parallelize_np_array(input_array, workers, loop_list, fun):
+        slices = [s for s in Utils.chunks(loop_list, workers)]
+        #with tempfile.TemporaryFile() as fp:
+        #    output = np.memmap(fp, dtype=input_array.dtype, shape=workers, mode='w+')
+        Parallel(n_jobs=workers)(delayed(fun)(input_array, sl) for sl in slices)
+        #    return output
+        return input_array
+
+    def chunks(lst, n):
+        lst = list(lst)
+        for i in range(0, len(lst), n):
+            yield lst[i:i + n]
+
 class svd2vec:
 
     WINDOW_WEIGHT_HARMONIC = 0
@@ -68,7 +91,7 @@ class svd2vec:
                  eig_p_weight=0,
                  nrm_type=NRM_SCHEME_ROW,
                  sub_threshold=1,  # 1e-5
-                 workers=10):
+                 workers=-1):
 
         # -------------
         # args checking
@@ -88,16 +111,24 @@ class svd2vec:
         elif isinstance(window, tuple) and len(window) == 2 and all(map(lambda e: isinstance(e, int), window)):
             window = Utils.create_window(left=window[0], right=window[1], weighter=window_weighter)
         else:
-            raise ValueError(window + " not implemented as a window yielder")
+            raise ValueError("'" + window + "' not implemented as a window yielder")
 
         # normalization type
         if nrm_type not in svd2vec.NRM_SCHEMES:
-            raise ValueError(nrm_type + " cannot be used in as a normalization method")
+            raise ValueError("'" + nrm_type + "' cannot be used in as a normalization method")
+
+        # workers
+        if isinstance(workers, int):
+            if workers < 1:
+                workers = multiprocessing.cpu_count()
+        else:
+            raise ValueError("'" + workers + "' is not a valid cpu count")
 
         # -----------
         # args saving
         # -----------
 
+        self.workers       = workers
         self.size          = size
         self.window        = window
         self.cds_alpha     = cds_alpha
@@ -113,6 +144,11 @@ class svd2vec:
         self.subsampling()
         self.weighted_count_matrix = self.skipgram_weighted_count_matrix()
 
+        # we do not need the window function anymore, plus keeping it as an
+        # instance variable will stop us from using joblib parallelisation
+        # because this can not be saved as a pickle object
+        self.window = None
+
         # ---------------
         # pmi computation
         # ---------------
@@ -124,9 +160,24 @@ class svd2vec:
         # ---------------
 
         self.svd_w, self.svd_c = self.svd()
-        self.similarity("interieur", "bleu")
-        self.similarity("bleu", "rouge")
-        self.similarity("maison", "cheval")
+
+
+        # self.similarity("interieur", "bleu")
+        # self.similarity("bleu", "rouge")
+        # self.similarity("maison", "cheval")
+        self.display_similarity("signalisation", "signalisation")
+        self.display_similarity("signalisation", "pancarte")
+        self.display_similarity("et", "le")
+        self.display_similarity("train", "locomotive")
+        self.display_similarity("train", "arrêté")
+        self.display_similarity("conducteur", "sécurité")
+
+        self.display_most_similar(positive=["train"])
+        self.display_most_similar(positive=["conducteur"])
+        self.display_most_similar(positive=["un"])
+        self.display_most_similar(positive=["signalisation"])
+        self.display_most_similar(negative=["signalisation"])
+        self.display_most_similar(negative=["titulaire"])
 
     #####
     # Building informations matrices and variables to be used later
@@ -171,15 +222,47 @@ class svd2vec:
 
     def pmi_matrix(self):
         # pointwise mutal information
-        pmi = np.zeros((self.vocabulary_len, self.vocabulary_len))
+        #pmi = np.zeros((self.vocabulary_len, self.vocabulary_len))
 
-        for word in self.vocabulary:
+        #with tempfile.NamedTemporaryFile() as fp:
+        #    pmi = np.memmap(fp, shape=(self.vocabulary_len, self.vocabulary_len), mode='w+', dtype=float)
+        #    print(pmi)
+        #    Parallel(n_jobs=self.workers)(delayed(self.parallelized_pmi_matrix)(word, pmi) for word in self.vocabulary)
+        #for word in self.vocabulary:
+        #    for context in self.vocabulary:
+        #        i_word    = self.vocabulary[word]
+        #        i_context = self.vocabulary[context]
+        #        pmi[i_word, i_context] = self.pmi(word, context)
+
+        slices = [a for a in Utils.chunks(self.vocabulary, self.workers)]
+        print(slices)
+
+        pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_2)(slice) for slice in slices)
+        pmi = np.array(pmi_list)
+
+        print(pmi)
+        input("a")
+
+        return pmi
+
+    def pmi_2(self, slice):
+        pmi = np.zeros((len(slice), self.vocabulary_len))
+
+        for i_word, word in enumerate(slice):
+            #i_word = self.vocabulary[word]
+
             for context in self.vocabulary:
-                i_word    = self.vocabulary[word]
                 i_context = self.vocabulary[context]
                 pmi[i_word, i_context] = self.pmi(word, context)
 
         return pmi
+
+
+    def parallelized_pmi_matrix(self, word, array):
+        i_word = self.vocabulary[word]
+        for context in self.vocabulary:
+            i_context = self.vocabulary[context]
+            array[i_word, i_context] = self.pmi(word, context)
 
     def ppmi_matrix(self, pmi):
         # positive pointwise mutal information
@@ -200,9 +283,17 @@ class svd2vec:
         u, s, v = svds(self.pmi, k=modified_k)
 
         w_svd_p = u * np.power(s, self.eig_p_weight)
-        c_svd   = v
+        c_svd   = v.T
 
         return w_svd_p, c_svd
+
+    def save(self, path):
+        with bz2.open(path, "wb") as file:
+            pickle.dump(self, file)
+
+    def load(path):
+        with bz2.open(path, "rb") as file:
+            return pickle.load(file)
 
     #####
     # Getting informations
@@ -239,14 +330,45 @@ class svd2vec:
     def similarity(self, x, y):
         wx, cx = self.vectors(x)
         wy, cy = self.vectors(y)
+        sim = self.cosine_similarity(wx, cx, wy, cy)
+        return sim
 
-        print(x, y)
-        print(cosine(wx, wy))
-        print(cosine(cx, cy))
-        print("")
-        #top = np.dot(wx, wy) + np.dot(cx, cy) + np.dot(wx, cy) + np.dot(cx, wy)
-        #bot = (2 * np.sqrt(np.dot(wx, cx) + 1)) * (np.sqrt(np.dot(wy, cy) + 1))
-        #print(top, bot)
+    def cosine_similarity(self, wx, cx, wy, cy):
+        top = np.dot(wx + cx, wy + cy)
+        bot = np.sqrt(np.dot(wx + cx, wx + cx)) * np.sqrt(np.dot(wy + cy, wy + cy))
+        return top / bot
+
+    def most_similar(self, positive=[], negative=[], topn=10):
+        if positive == [] and negative == []:
+            raise ValueError("Cannot get the most similar words without any positive or negative words")
+
+        positives = [self.vectors(x) for x in positive]
+        negatives = [self.vectors(x) for x in negative]
+
+        first_w, first_c = positives[0] if positive else negatives[0]
+
+        current_w = np.zeros(first_w.shape)
+        current_c = np.zeros(first_c.shape)
+
+        for positive_w, positive_c in positives:
+            current_w += positive_w
+            current_c += positive_c
+        for negative_w, negative_c in negatives:
+            current_w -= negative_w
+            current_c -= negative_c
+
+        not_to_calc_similiarity = set(positive).union(set(negative))
+
+        similiarities = {}
+        for word in self.vocabulary:
+            if word in not_to_calc_similiarity:
+                break
+            w, c = self.vectors(word)
+            sim  = self.cosine_similarity(current_w, current_c, w, c)
+            similiarities[word] = sim
+
+        most_similar = heapq.nlargest(topn, similiarities.items(), key=itemgetter(1))
+        return most_similar
 
     def vectors(self, word):
         if word in self.vocabulary:
@@ -255,7 +377,7 @@ class svd2vec:
             c = self.svd_c[i_word]
             return w, c
         else:
-            raise ValueError("Word " + word + " not in the vocabulary")
+            raise ValueError("Word '" + word + "' not in the vocabulary")
 
     #####
     # Debug
@@ -269,3 +391,11 @@ class svd2vec:
         df = pd.DataFrame(matrix.toarray(), columns=v, index=v)
         df = df.applymap(lambda x: '{:4.2f}'.format(x) if x != 0 else "")
         print(df)
+
+    def display_similarity(self, word1, word2):
+        sim = self.similarity(word1, word2)
+        print(word1, " & ", word2, sim)
+
+    def display_most_similar(self, positive=[], negative=[]):
+        sims = self.most_similar(positive=positive, negative=negative)
+        print(positive, negative, sims)
