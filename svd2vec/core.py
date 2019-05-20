@@ -56,18 +56,9 @@ class Utils:
         weight = 1.0 * windowSize / dist
         return (word, context, weight)
 
-    def parallelize_np_array(input_array, workers, loop_list, fun):
-        slices = [s for s in Utils.chunks(loop_list, workers)]
-        #with tempfile.TemporaryFile() as fp:
-        #    output = np.memmap(fp, dtype=input_array.dtype, shape=workers, mode='w+')
-        Parallel(n_jobs=workers)(delayed(fun)(input_array, sl) for sl in slices)
-        #    return output
-        return input_array
-
-    def chunks(lst, n):
-        lst = list(lst)
-        for i in range(0, len(lst), n):
-            yield lst[i:i + n]
+    def split(a, n):
+        k, m = divmod(len(a), n)
+        return list(a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
 
 class svd2vec:
 
@@ -90,7 +81,7 @@ class svd2vec:
                  neg_k_shift=5,
                  eig_p_weight=0,
                  nrm_type=NRM_SCHEME_ROW,
-                 sub_threshold=1,  # 1e-5
+                 sub_threshold=1e-5,
                  workers=-1):
 
         # -------------
@@ -153,31 +144,12 @@ class svd2vec:
         # pmi computation
         # ---------------
         self.pmi = self.sparse_pmi_matrix(self.sppmi_matrix(self.pmi_matrix()))
-        # self.display_matrix(self.pmi)
 
         # ---------------
         # svd computation
         # ---------------
 
         self.svd_w, self.svd_c = self.svd()
-
-
-        # self.similarity("interieur", "bleu")
-        # self.similarity("bleu", "rouge")
-        # self.similarity("maison", "cheval")
-        self.display_similarity("signalisation", "signalisation")
-        self.display_similarity("signalisation", "pancarte")
-        self.display_similarity("et", "le")
-        self.display_similarity("train", "locomotive")
-        self.display_similarity("train", "arrêté")
-        self.display_similarity("conducteur", "sécurité")
-
-        self.display_most_similar(positive=["train"])
-        self.display_most_similar(positive=["conducteur"])
-        self.display_most_similar(positive=["un"])
-        self.display_most_similar(positive=["signalisation"])
-        self.display_most_similar(negative=["signalisation"])
-        self.display_most_similar(negative=["titulaire"])
 
     #####
     # Building informations matrices and variables to be used later
@@ -187,6 +159,7 @@ class svd2vec:
         self.documents = documents
         self.all_words = Utils.flatten(self.documents)
         self.d_size    = len(self.all_words)
+        self.d_size_cds_power = np.power(self.d_size, self.cds_alpha)
 
         unique = list(OrderedDict.fromkeys(self.all_words))
         self.vocabulary = OrderedDict()
@@ -195,6 +168,7 @@ class svd2vec:
 
         self.vocabulary_len = len(self.vocabulary)
         self.terms_counts   = Counter(self.all_words)
+        self.terms_counts_cds_powered = {word: np.power(self.terms_counts[word], self.cds_alpha) for word in self.terms_counts}
 
     def subsampling(self):
         new_docs = []
@@ -222,47 +196,23 @@ class svd2vec:
 
     def pmi_matrix(self):
         # pointwise mutal information
-        #pmi = np.zeros((self.vocabulary_len, self.vocabulary_len))
 
-        #with tempfile.NamedTemporaryFile() as fp:
-        #    pmi = np.memmap(fp, shape=(self.vocabulary_len, self.vocabulary_len), mode='w+', dtype=float)
-        #    print(pmi)
-        #    Parallel(n_jobs=self.workers)(delayed(self.parallelized_pmi_matrix)(word, pmi) for word in self.vocabulary)
-        #for word in self.vocabulary:
-        #    for context in self.vocabulary:
-        #        i_word    = self.vocabulary[word]
-        #        i_context = self.vocabulary[context]
-        #        pmi[i_word, i_context] = self.pmi(word, context)
-
-        slices = [a for a in Utils.chunks(self.vocabulary, self.workers)]
-        print(slices)
-
-        pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_2)(slice) for slice in slices)
-        pmi = np.array(pmi_list)
-
-        print(pmi)
-        input("a")
+        slices = Utils.split(list(self.vocabulary), self.workers)
+        pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice) for slice in slices)
+        pmi = np.concatenate(pmi_list, axis=0)
 
         return pmi
 
-    def pmi_2(self, slice):
+    def pmi_parallized(self, slice):
+        # returns a small matrix corresponding to the slice of words given (rows)
         pmi = np.zeros((len(slice), self.vocabulary_len))
 
         for i_word, word in enumerate(slice):
-            #i_word = self.vocabulary[word]
-
             for context in self.vocabulary:
                 i_context = self.vocabulary[context]
                 pmi[i_word, i_context] = self.pmi(word, context)
 
         return pmi
-
-
-    def parallelized_pmi_matrix(self, word, array):
-        i_word = self.vocabulary[word]
-        for context in self.vocabulary:
-            i_context = self.vocabulary[context]
-            array[i_word, i_context] = self.pmi(word, context)
 
     def ppmi_matrix(self, pmi):
         # positive pointwise mutal information
@@ -285,7 +235,20 @@ class svd2vec:
         w_svd_p = u * np.power(s, self.eig_p_weight)
         c_svd   = v.T
 
+        w_svd_p = self.normalize(w_svd_p, self.nrm_type)
+
         return w_svd_p, c_svd
+
+    def normalize(self, matrix, nrm_type):
+        if nrm_type == svd2vec.NRM_SCHEME_NONE:
+            return matrix
+        if nrm_type == svd2vec.NRM_SCHEME_ROW:
+            return matrix / np.linalg.norm(matrix, axis=0, keepdims=True)
+        if nrm_type == svd2vec.NRM_SCHEME_COLUMN:
+            return matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
+        if nrm_type == svd2vec.NRM_SCHEME_BOTH:
+            raise NotImplementedError("Normalization NRM_SCHEME_BOTH not yet implemented")
+        raise ValueError("Normalization '" + nrm_type + "' error")
 
     def save(self, path):
         with bz2.open(path, "wb") as file:
@@ -299,8 +262,11 @@ class svd2vec:
     # Getting informations
     #####
 
-    def weight_count_term(self, term):
-        count_term = self.terms_counts[term]
+    def weight_count_term(self, term, cds_power=False):
+        if cds_power:
+            count_term = self.terms_counts_cds_powered[term]
+        else:
+            count_term = self.terms_counts[term]
         return count_term
 
     def weight_count_term_term(self, t1, t2):
@@ -313,13 +279,11 @@ class svd2vec:
 
         n_wc = self.weight_count_term_term(word, context)
         n_w  = self.weight_count_term(word)
-        n_c  = self.weight_count_term(context)
+        n_c_powered = self.weight_count_term(context, cds_power=True)
 
-        n_d = self.d_size
-
-        p_wc = n_wc / n_d
-        p_w  = n_w  / n_d
-        p_c  = np.power(n_c, self.cds_alpha) / np.power(n_d, self.cds_alpha)
+        p_wc = n_wc / self.d_size
+        p_w  = n_w  / self.d_size
+        p_c  = n_c_powered / self.d_size_cds_power
 
         frac = p_wc / (p_w * p_c)
 
