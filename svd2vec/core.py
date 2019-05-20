@@ -1,99 +1,21 @@
-import os
-import sys
-import random
+
+import bz2
+import heapq
+import pickle
 import numpy as np
 import pandas as pd
+import multiprocessing
 
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import svds
 from scipy.spatial.distance import cosine
-
-import heapq
+from joblib import Parallel, delayed
 from collections import OrderedDict, Counter
 from operator import itemgetter
 
-import bz2
-import pickle
-import tempfile
-
-import multiprocessing
-from numba import jit
-from joblib import Parallel, delayed
-
-from pympler import asizeof
-
-class Utils:
-
-    def flatten(lst):
-        # Returns a flatten version of the given list
-        # All sublists are merged onto a bigger list. Non-list elements are removed
-        return [item for sublst in lst for item in sublst if isinstance(sublst, list)]
-
-    def random_decision(probability):
-        return random.random() < probability
-
-    def split(a, n):
-        k, m = divmod(len(a), n)
-        return list(a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
-
-    def getsize(obj):
-        size  = {}
-        size["total"] = 0
-        for var, inner_obj in obj.__dict__.items():
-            if isinstance(inner_obj, np.core.memmap):
-                size[var] = sys.getsizeof(inner_obj)
-            else:
-                size[var] = asizeof.asizeof(inner_obj)
-            size["total"] += size[var]
-        return size
-
-class WindowWeights:
-
-    def create_window(left, right, weighter):
-        def window(document):
-            doc_len = len(document)
-            for iW, word in enumerate(document):
-                for i in reversed(range(1, left)):
-                    ictx = iW - i
-                    if ictx <= 0:
-                        break
-                    ctx = document[ictx]
-                    yield weighter(word, ctx, i, left)
-                for i in range(1, right):
-                    ictx = iW + i
-                    if ictx >= doc_len:
-                        break
-                    ctx = document[ictx]
-                    yield weighter(word, ctx, i, right)
-        return window
-
-    def weight_harmonic(word, context, dist, windowSize):
-        weight = 1.0 / dist
-        return (word, context, weight)
-
-    def weight_word2vec(word, context, dist, windowSize):
-        # In the paper, the word2vec weight is written as
-        #      weight = (1.0 * dist) / windowSize
-        # But that makes no sens to have a bigger weight for distant words,
-        # so I inversed the formula
-        weight = 1.0 * windowSize / dist
-        return (word, context, weight)
-
-class TemporaryArray:
-
-    def __init__(self, shape, dtype):
-        self.shape = shape
-        self.dtype = dtype
-        self.file_name = tempfile.NamedTemporaryFile().name
-
-    def load(self, erase=False):
-        if erase:
-            return np.memmap(self.file_name, shape=self.shape, dtype=self.dtype, mode='w+')
-        else:
-            return np.memmap(self.file_name, shape=self.shape, dtype=self.dtype, mode='r')
-
-    def close(self):
-        os.remove(self.file_name)
+from .utils import Utils
+from .window import WindowWeights
+from .temporary_array import TemporaryArray
 
 class svd2vec:
 
@@ -307,6 +229,10 @@ class svd2vec:
             raise NotImplementedError("Normalization NRM_SCHEME_BOTH not yet implemented")
         raise ValueError("Normalization '" + nrm_type + "' error")
 
+    #####
+    # I/O
+    #####
+
     def save(self, path):
         with bz2.open(path, "wb") as file:
             pickle.dump(self, file)
@@ -333,7 +259,6 @@ class svd2vec:
         return weighted_count
 
     def pmi(self, word, context):
-
         n_wc = self.weight_count_term_term(word, context)
         n_w  = self.weight_count_term(word)
         n_c_powered = self.weight_count_term(context, cds_power=True)
@@ -348,18 +273,23 @@ class svd2vec:
             return -np.inf
         return np.log(frac)
 
+    def cosine_similarity(self, wx, cx, wy, cy):
+        # compute the cosine similarity of x (word x and context x) and y (word
+        # y and context y)
+        top = np.dot(wx + cx, wy + cy)
+        bot = np.sqrt(np.dot(wx + cx, wx + cx)) * np.sqrt(np.dot(wy + cy, wy + cy))
+        return top / bot
+
     def similarity(self, x, y):
+        # Returns the similarity of the two words x and y
         wx, cx = self.vectors(x)
         wy, cy = self.vectors(y)
         sim = self.cosine_similarity(wx, cx, wy, cy)
         return sim
 
-    def cosine_similarity(self, wx, cx, wy, cy):
-        top = np.dot(wx + cx, wy + cy)
-        bot = np.sqrt(np.dot(wx + cx, wx + cx)) * np.sqrt(np.dot(wy + cy, wy + cy))
-        return top / bot
-
     def most_similar(self, positive=[], negative=[], topn=10):
+        # Output the most similar words for the given positive and negative
+        # words. topn limits the number of output words
         if not isinstance(positive, list) or not isinstance(negative, list):
             raise ValueError("Positive and Negative should be a list of words inside the vocabulary")
         if positive == [] and negative == []:
