@@ -1,4 +1,4 @@
-
+import os
 import sys
 import random
 import numpy as np
@@ -75,6 +75,22 @@ class Utils:
             size["total"] += size[var]
         return size
 
+class TemporaryArray:
+
+    def __init__(self, shape, dtype):
+        self.shape = shape
+        self.dtype = dtype
+        self.file_name = tempfile.NamedTemporaryFile().name
+
+    def load(self, erase=False):
+        if erase:
+            return np.memmap(self.file_name, shape=self.shape, dtype=self.dtype, mode='w+')
+        else:
+            return np.memmap(self.file_name, shape=self.shape, dtype=self.dtype, mode='r')
+
+    def close(self):
+        os.remove(self.file_name)
+
 class svd2vec:
 
     WINDOW_WEIGHT_HARMONIC = 0
@@ -149,8 +165,7 @@ class svd2vec:
         # --------------------
         self.build_vocabulary(documents)
         self.subsampling()
-        self.weighted_count_matrix = self.skipgram_weighted_count_matrix()
-
+        self.weighted_count_matrix_file = self.skipgram_weighted_count_matrix()
         self.clean_instance_variables()
 
         # ---------------
@@ -163,6 +178,11 @@ class svd2vec:
         # ---------------
 
         self.svd_w, self.svd_c = self.svd()
+
+        # -------
+        # closing
+        # -------
+        self.weighted_count_matrix_file.close()
 
     #####
     # Building informations matrices and variables to be used later
@@ -188,16 +208,19 @@ class svd2vec:
         for document in self.documents:
             new_words = []
             for word in document:
+                if self.terms_counts[word] < self.min_count:
+                    continue
                 word_frequency = 1.0 * self.terms_counts[word] / self.d_size
                 prob = 1 - np.sqrt(self.sub_threshold / word_frequency)
-                if not Utils.random_decision(prob) and self.terms_counts[word] >= self.min_count:
+                if not Utils.random_decision(prob):
                     # we keep the word
                     new_words.append(word)
             new_docs.append(new_words)
         self.build_vocabulary(new_docs)
 
     def skipgram_weighted_count_matrix(self):
-        matrix = np.zeros((self.vocabulary_len, self.vocabulary_len))
+        file   = TemporaryArray((self.vocabulary_len, self.vocabulary_len), float)
+        matrix = file.load(erase=True)
 
         for document in self.documents:
             for word, context, weight in self.window(document):
@@ -205,10 +228,10 @@ class svd2vec:
                 i_context = self.vocabulary[context]
                 matrix[i_word, i_context] += weight
 
-        return matrix
+        del matrix
+        return file
 
     def clean_instance_variables(self):
-        print(Utils.getsize(self))
         # these two instances variables uses too much RAM, and it's not longer
         # useful
         delattr(self, "all_words")
@@ -218,26 +241,26 @@ class svd2vec:
         # instance variable will stop us from using joblib parallelisation
         # because this can not be saved as a pickle object
         delattr(self, "window")
-        print(Utils.getsize(self))
 
     def pmi_matrix(self):
         # pointwise mutal information
 
-        print(self.weighted_count_matrix)
         slices = Utils.split(list(self.vocabulary), self.workers)
-        pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice, self.weighted_count_matrix) for slice in slices)
+        pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice) for slice in slices)
         pmi = np.concatenate(pmi_list, axis=0)
 
         return pmi
 
-    def pmi_parallized(self, slice, weighted_count_matrix):
+    def pmi_parallized(self, slice):
         # returns a small matrix corresponding to the slice of words given (rows)
         pmi = np.zeros((len(slice), self.vocabulary_len))
+        self.weighted_count_matrix = self.weighted_count_matrix_file.load()
         for i_word, word in enumerate(slice):
             for context in self.vocabulary:
                 i_context = self.vocabulary[context]
                 pmi[i_word, i_context] = self.pmi(word, context)
 
+        del self.weighted_count_matrix
         return pmi
 
     def ppmi_matrix(self, pmi):

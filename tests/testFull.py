@@ -1,8 +1,10 @@
 
 import os
+import pickle
 from context import svd2vec
 
 from gensim.models import Word2Vec
+
 
 p = "/home/s150789/Ressources/output_linguistic/"
 
@@ -19,7 +21,17 @@ def list_files():
     return [p + f for f in os.listdir(p)]
 
 
-documents = all_files(list_files()[:50])
+document_path = "/home/s150789/documents.txt"
+build_documents = False
+
+if build_documents:
+    documents = all_files(list_files())
+    pickle.dump(documents, open(document_path, 'wb'))
+else:
+    documents = pickle.load(open(document_path, 'rb'))
+
+documents = documents[:500]
+print("Fin")
 
 svd_vectorized = svd2vec.svd2vec(
     documents,
