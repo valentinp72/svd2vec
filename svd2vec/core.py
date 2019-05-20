@@ -32,6 +32,23 @@ class Utils:
     def random_decision(probability):
         return random.random() < probability
 
+    def split(a, n):
+        k, m = divmod(len(a), n)
+        return list(a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
+
+    def getsize(obj):
+        size  = {}
+        size["total"] = 0
+        for var, inner_obj in obj.__dict__.items():
+            if isinstance(inner_obj, np.core.memmap):
+                size[var] = sys.getsizeof(inner_obj)
+            else:
+                size[var] = asizeof.asizeof(inner_obj)
+            size["total"] += size[var]
+        return size
+
+class WindowWeights:
+
     def create_window(left, right, weighter):
         def window(document):
             doc_len = len(document)
@@ -55,25 +72,12 @@ class Utils:
         return (word, context, weight)
 
     def weight_word2vec(word, context, dist, windowSize):
-        #weight = (1.0 * dist) / windowSize
-        #weight = 1.0 * windowSize / dist
-        weight = 1.0
+        # In the paper, the word2vec weight is written as
+        #      weight = (1.0 * dist) / windowSize
+        # But that makes no sens to have a bigger weight for distant words,
+        # so I inversed the formula
+        weight = 1.0 * windowSize / dist
         return (word, context, weight)
-
-    def split(a, n):
-        k, m = divmod(len(a), n)
-        return list(a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
-
-    def getsize(obj):
-        size  = {}
-        size["total"] = 0
-        for var, inner_obj in obj.__dict__.items():
-            if isinstance(inner_obj, np.core.memmap):
-                size[var] = sys.getsizeof(inner_obj)
-            else:
-                size[var] = asizeof.asizeof(inner_obj)
-            size["total"] += size[var]
-        return size
 
 class TemporaryArray:
 
@@ -102,6 +106,8 @@ class svd2vec:
     NRM_SCHEME_BOTH   = "both"
     NRM_SCHEMES = [NRM_SCHEME_NONE, NRM_SCHEME_ROW, NRM_SCHEME_COLUMN, NRM_SCHEME_BOTH]
 
+    MAX_CPU_CORES = -1
+
     def __init__(self,
                  documents,
                  size=150,
@@ -113,7 +119,7 @@ class svd2vec:
                  eig_p_weight=0,
                  nrm_type=NRM_SCHEME_ROW,
                  sub_threshold=1e-5,
-                 workers=-1):
+                 workers=MAX_CPU_CORES):
 
         # -------------
         # args checking
@@ -121,17 +127,17 @@ class svd2vec:
 
         # dyn weight
         if dyn_window_weight == svd2vec.WINDOW_WEIGHT_HARMONIC:
-            window_weighter = Utils.weight_harmonic
+            window_weighter = WindowWeights.weight_harmonic
         elif dyn_window_weight == svd2vec.WINDOW_WEIGHT_WORD2VEC:
-            window_weighter = Utils.weight_word2vec
+            window_weighter = WindowWeights.weight_word2vec
         else:
             raise ValueError(dyn_window_weight + " not implemented as a weighter")
 
         # window type
         if isinstance(window, int):
-            window = Utils.create_window(left=window, right=window, weighter=window_weighter)
+            window = WindowWeights.create_window(left=window, right=window, weighter=window_weighter)
         elif isinstance(window, tuple) and len(window) == 2 and all(map(lambda e: isinstance(e, int), window)):
-            window = Utils.create_window(left=window[0], right=window[1], weighter=window_weighter)
+            window = WindowWeights.create_window(left=window[0], right=window[1], weighter=window_weighter)
         else:
             raise ValueError("'" + window + "' not implemented as a window yielder")
 
@@ -182,6 +188,8 @@ class svd2vec:
         # -------
         # closing
         # -------
+        # weighted_count_matrix_file was not a simple numpy matrix at a path to
+        # a memmap of a numpy matrix. Now we can remove the temporary file
         self.weighted_count_matrix_file.close()
 
     #####
@@ -384,6 +392,11 @@ class svd2vec:
 
         most_similar = heapq.nlargest(topn, similiarities.items(), key=itemgetter(1))
         return most_similar
+
+    def analogy(self, exampleA, answerA, exampleB):
+        # returns answerB, ie the answer to the question
+        # exampleA is to answerA as exampleB is to answerB
+        return self.most_similar(positive=[exampleB, exampleA], negative=[answerA])
 
     def vectors(self, word):
         if word in self.vocabulary:
