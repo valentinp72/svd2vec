@@ -1,4 +1,5 @@
 
+import sys
 import random
 import numpy as np
 import pandas as pd
@@ -13,11 +14,13 @@ from operator import itemgetter
 
 import bz2
 import pickle
+import tempfile
 
 import multiprocessing
-import tempfile
 from numba import jit
 from joblib import Parallel, delayed
+
+from pympler import asizeof
 
 class Utils:
 
@@ -52,13 +55,25 @@ class Utils:
         return (word, context, weight)
 
     def weight_word2vec(word, context, dist, windowSize):
-        # weight = (1.0 * dist) / windowSize
-        weight = 1.0 * windowSize / dist
+        #weight = (1.0 * dist) / windowSize
+        #weight = 1.0 * windowSize / dist
+        weight = 1.0
         return (word, context, weight)
 
     def split(a, n):
         k, m = divmod(len(a), n)
         return list(a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
+
+    def getsize(obj):
+        size  = {}
+        size["total"] = 0
+        for var, inner_obj in obj.__dict__.items():
+            if isinstance(inner_obj, np.core.memmap):
+                size[var] = sys.getsizeof(inner_obj)
+            else:
+                size[var] = asizeof.asizeof(inner_obj)
+            size["total"] += size[var]
+        return size
 
 class svd2vec:
 
@@ -120,6 +135,7 @@ class svd2vec:
         # -----------
 
         self.workers       = workers
+        self.min_count     = min_count
         self.size          = size
         self.window        = window
         self.cds_alpha     = cds_alpha
@@ -135,10 +151,7 @@ class svd2vec:
         self.subsampling()
         self.weighted_count_matrix = self.skipgram_weighted_count_matrix()
 
-        # we do not need the window function anymore, plus keeping it as an
-        # instance variable will stop us from using joblib parallelisation
-        # because this can not be saved as a pickle object
-        self.window = None
+        self.clean_instance_variables()
 
         # ---------------
         # pmi computation
@@ -177,7 +190,7 @@ class svd2vec:
             for word in document:
                 word_frequency = 1.0 * self.terms_counts[word] / self.d_size
                 prob = 1 - np.sqrt(self.sub_threshold / word_frequency)
-                if not Utils.random_decision(prob):
+                if not Utils.random_decision(prob) and self.terms_counts[word] >= self.min_count:
                     # we keep the word
                     new_words.append(word)
             new_docs.append(new_words)
@@ -194,19 +207,32 @@ class svd2vec:
 
         return matrix
 
+    def clean_instance_variables(self):
+        print(Utils.getsize(self))
+        # these two instances variables uses too much RAM, and it's not longer
+        # useful
+        delattr(self, "all_words")
+        delattr(self, "documents")
+
+        # we do not need the window function anymore, plus keeping it as an
+        # instance variable will stop us from using joblib parallelisation
+        # because this can not be saved as a pickle object
+        delattr(self, "window")
+        print(Utils.getsize(self))
+
     def pmi_matrix(self):
         # pointwise mutal information
 
+        print(self.weighted_count_matrix)
         slices = Utils.split(list(self.vocabulary), self.workers)
-        pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice) for slice in slices)
+        pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice, self.weighted_count_matrix) for slice in slices)
         pmi = np.concatenate(pmi_list, axis=0)
 
         return pmi
 
-    def pmi_parallized(self, slice):
+    def pmi_parallized(self, slice, weighted_count_matrix):
         # returns a small matrix corresponding to the slice of words given (rows)
         pmi = np.zeros((len(slice), self.vocabulary_len))
-
         for i_word, word in enumerate(slice):
             for context in self.vocabulary:
                 i_context = self.vocabulary[context]
@@ -221,7 +247,7 @@ class svd2vec:
 
     def sppmi_matrix(self, pmi):
         # shifted positive pointwise mutal information
-        spmi = pmi - np.log2(self.neg_k_shift)  # not sure if it's log or log2
+        spmi = pmi - np.log(self.neg_k_shift)
         return self.ppmi_matrix(spmi)
 
     def sparse_pmi_matrix(self, pmi):
@@ -289,7 +315,7 @@ class svd2vec:
 
         if frac == 0:
             return -np.inf
-        return np.log2(frac)
+        return np.log(frac)
 
     def similarity(self, x, y):
         wx, cx = self.vectors(x)
@@ -303,6 +329,8 @@ class svd2vec:
         return top / bot
 
     def most_similar(self, positive=[], negative=[], topn=10):
+        if not isinstance(positive, list) or not isinstance(negative, list):
+            raise ValueError("Positive and Negative should be a list of words inside the vocabulary")
         if positive == [] and negative == []:
             raise ValueError("Cannot get the most similar words without any positive or negative words")
 
@@ -326,7 +354,7 @@ class svd2vec:
         similiarities = {}
         for word in self.vocabulary:
             if word in not_to_calc_similiarity:
-                break
+                continue
             w, c = self.vectors(word)
             sim  = self.cosine_similarity(current_w, current_c, w, c)
             similiarities[word] = sim
