@@ -262,7 +262,8 @@ class svd2vec:
         if nrm_type == svd2vec.NRM_SCHEME_COLUMN:
             return matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
         if nrm_type == svd2vec.NRM_SCHEME_BOTH:
-            raise NotImplementedError("Normalization NRM_SCHEME_BOTH not yet implemented")
+            return matrix / np.linalg.norm(matrix, keepdims=True)
+            # raise NotImplementedError("Normalization NRM_SCHEME_BOTH not yet implemented")
         raise ValueError("Normalization '" + nrm_type + "' error")
 
     #####
@@ -323,6 +324,11 @@ class svd2vec:
         sim = self.cosine_similarity(wx, cx, wy, cy)
         return sim
 
+    def distance(self, x, y):
+        # Returns the cosine distance between the two words x and y
+        sim = self.similarity(x, y)
+        return 1 - sim
+
     def most_similar(self, positive=[], negative=[], topn=10):
         # Output the most similar words for the given positive and negative
         # words. topn limits the number of output words
@@ -336,15 +342,17 @@ class svd2vec:
 
         first_w, first_c = positives[0] if positive else negatives[0]
 
-        current_w = np.zeros(first_w.shape)
-        current_c = np.zeros(first_c.shape)
-
+        mean_w = []
+        mean_c = []
         for positive_w, positive_c in positives:
-            current_w += positive_w
-            current_c += positive_c
+            mean_w.append(positive_w)
+            mean_c.append(positive_c)
         for negative_w, negative_c in negatives:
-            current_w -= negative_w
-            current_c -= negative_c
+            mean_w.append(-1.0 * negative_w)
+            mean_c.append(-1.0 * negative_c)
+
+        current_w = np.array(mean_w).mean(axis=0)
+        current_c = np.array(mean_c).mean(axis=0)
 
         not_to_calc_similiarity = set(positive).union(set(negative))
 
