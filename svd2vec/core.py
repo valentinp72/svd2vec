@@ -278,6 +278,13 @@ class svd2vec:
         with bz2.open(path, "rb") as file:
             return pickle.load(file)
 
+    def save_word2vec_format(self, path):
+        with open(path, "w") as f:
+            print(str(self.vocabulary_len) + " " + str(self.size), file=f)
+            for word in self.vocabulary:
+                values = " ".join(["{:.6f}".format(e) for e in self.vectors(word)[0]])
+                print(word + " " + values, file=f)
+
     #####
     # Getting informations
     #####
@@ -315,6 +322,8 @@ class svd2vec:
         # y and context y)
         top = np.dot(wx + cx, wy + cy)
         bot = np.sqrt(np.dot(wx + cx, wx + cx)) * np.sqrt(np.dot(wy + cy, wy + cy))
+        #top = np.dot(wx, wy) + np.dot(cx, cy) + np.dot(wx, cy) + np.dot(cx, wy)
+        #bot = (2 * np.sqrt(np.dot(wx, cx) + 1)) * (np.sqrt(np.dot(wy, cy) + 1))
         return top / bot
 
     def similarity(self, x, y):
