@@ -36,7 +36,8 @@ print("Fin")
 svd_vectorized = svd2vec.svd2vec(
     documents,
     window=5,
-    min_count=5,
+    min_count=25,
+    verbose=True,
     nrm_type=svd2vec.svd2vec.NRM_SCHEME_COLUMN,
     dyn_window_weight=svd2vec.svd2vec.WINDOW_WEIGHT_WORD2VEC,
     sub_threshold=1e-5)

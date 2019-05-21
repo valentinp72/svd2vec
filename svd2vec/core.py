@@ -12,6 +12,7 @@ from scipy.spatial.distance import cosine
 from joblib import Parallel, delayed
 from collections import OrderedDict, Counter
 from operator import itemgetter
+from tqdm import tqdm
 
 from .utils import Utils
 from .window import WindowWeights
@@ -41,6 +42,7 @@ class svd2vec:
                  eig_p_weight=0,
                  nrm_type=NRM_SCHEME_ROW,
                  sub_threshold=1e-5,
+                 verbose=True,
                  workers=MAX_CPU_CORES):
 
         # -------------
@@ -87,6 +89,8 @@ class svd2vec:
         self.neg_k_shift   = neg_k_shift
         self.eig_p_weight  = eig_p_weight
         self.nrm_type      = nrm_type
+        self.verbose       = verbose
+        self.bar_offset    = 0
 
         # --------------------
         # document preparation
@@ -119,25 +123,32 @@ class svd2vec:
     #####
 
     def build_vocabulary(self, documents):
+        bar = self.bar(desc="vocabulary building", total=8)
         self.documents = documents
+        bar.update()
         self.all_words = Utils.flatten(self.documents)
+        bar.update()
         self.d_size    = len(self.all_words)
+        bar.update()
         self.d_size_cds_power = np.power(self.d_size, self.cds_alpha)
+        bar.update()
 
-        unique = list(OrderedDict.fromkeys(self.all_words))
-        self.vocabulary = OrderedDict()
-        for i in range(len(unique)):
-            self.vocabulary[unique[i]] = i
-
-        self.vocabulary_len = len(self.vocabulary)
-        self.terms_counts   = Counter(self.all_words)
+        self.terms_counts = Counter(self.all_words)
+        bar.update()
         self.terms_counts_cds_powered = {word: np.power(self.terms_counts[word], self.cds_alpha) for word in self.terms_counts}
+        bar.update()
+
+        self.vocabulary     = OrderedDict([(w, i) for i, (w, c) in enumerate(self.terms_counts.most_common())])
+        bar.update()
+        self.vocabulary_len = len(self.vocabulary)
+        bar.update()
+        bar.close()
 
     def subsampling(self):
         new_docs = []
-        for document in self.documents:
+        for document in self.bar(self.documents, "document subsampling"):
             new_words = []
-            for word in document:
+            for word in self.bar(document, "word subsampling", offset=1):
                 if self.terms_counts[word] < self.min_count:
                     continue
                 word_frequency = 1.0 * self.terms_counts[word] / self.d_size
@@ -148,16 +159,28 @@ class svd2vec:
             new_docs.append(new_words)
         self.build_vocabulary(new_docs)
 
+    def bar(self, yielder=None, desc=None, total=None, offset=0):
+        disable = not self.verbose
+        return tqdm(
+            iterable=yielder,
+            desc=desc,
+            leave=False,
+            total=total,
+            disable=disable,
+            position=offset,
+            bar_format="{desc: <30} {percentage:3.0f}%  {bar}")
+
     def skipgram_weighted_count_matrix(self):
-        file   = TemporaryArray((self.vocabulary_len, self.vocabulary_len), float)
+        file = TemporaryArray((self.vocabulary_len, self.vocabulary_len), np.dtype('float16'))
         matrix = file.load(erase=True)
 
-        for document in self.documents:
-            for word, context, weight in self.window(document):
+        for document in self.bar(self.documents, "co-occurence counting"):
+            for word, context, weight in self.bar(self.window(document), "document co-occurence counting", total=self.vocabulary_len * self.vocabulary_len, offset=1):
                 i_word    = self.vocabulary[word]
                 i_context = self.vocabulary[context]
                 matrix[i_word, i_context] += weight
 
+        matrix.flush()
         del matrix
         return file
 
@@ -176,16 +199,22 @@ class svd2vec:
         # pointwise mutal information
 
         slices = Utils.split(list(self.vocabulary), self.workers)
-        pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice) for slice in slices)
+        pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice, i) for i, slice in enumerate(slices) if slice != [])
         pmi = np.concatenate(pmi_list, axis=0)
+
+        if self.verbose:
+            print("")
 
         return pmi
 
-    def pmi_parallized(self, slice):
+    def pmi_parallized(self, slice, i):
         # returns a small matrix corresponding to the slice of words given (rows)
         pmi = np.zeros((len(slice), self.vocabulary_len))
-        self.weighted_count_matrix = self.weighted_count_matrix_file.load()
-        for i_word, word in enumerate(slice):
+        self.weighted_count_matrix_offset = self.vocabulary[slice[0]]
+        self.weighted_count_matrix = self.weighted_count_matrix_file.load(size=len(slice), start=self.weighted_count_matrix_offset)
+
+        name = "pmi " + str(i + 1) + " / " + str(self.workers)
+        for i_word, word in enumerate(self.bar(slice, desc=name, offset=i)):
             for context in self.vocabulary:
                 i_context = self.vocabulary[context]
                 pmi[i_word, i_context] = self.pmi(word, context)
@@ -208,13 +237,20 @@ class svd2vec:
         return sparsed
 
     def svd(self):
+        bar = self.bar(desc="singular value decomposition", total=5)
         modified_k = min(self.size, self.pmi.shape[0] - 1)
+        bar.update()
         u, s, v = svds(self.pmi, k=modified_k)
+        bar.update()
 
         w_svd_p = u * np.power(s, self.eig_p_weight)
+        bar.update()
         c_svd   = v.T
+        bar.update()
 
         w_svd_p = self.normalize(w_svd_p, self.nrm_type)
+        bar.update()
+        bar.close()
 
         return w_svd_p, c_svd
 
@@ -253,7 +289,7 @@ class svd2vec:
         return count_term
 
     def weight_count_term_term(self, t1, t2):
-        i_t1 = self.vocabulary[t1]
+        i_t1 = self.vocabulary[t1] - self.weighted_count_matrix_offset
         i_t2 = self.vocabulary[t2]
         weighted_count = self.weighted_count_matrix[i_t1, i_t2]
         return weighted_count
@@ -326,7 +362,7 @@ class svd2vec:
     def analogy(self, exampleA, answerA, exampleB):
         # returns answerB, ie the answer to the question
         # exampleA is to answerA as exampleB is to answerB
-        return self.most_similar(positive=[exampleB, exampleA], negative=[answerA])
+        return self.most_similar(positive=[exampleB, answerA], negative=[exampleA])
 
     def vectors(self, word):
         if word in self.vocabulary:

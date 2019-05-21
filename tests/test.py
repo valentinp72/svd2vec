@@ -13,7 +13,9 @@ print(documents)
 svd_vectorized = svd2vec.svd2vec(
     documents,
     window=5,
+    min_count=1,
     sub_threshold=1,
+    verbose=True,
     dyn_window_weight=svd2vec.svd2vec.WINDOW_WEIGHT_WORD2VEC
 )
 
