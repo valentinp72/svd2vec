@@ -1,3 +1,6 @@
+"""
+.. module:: argparse_actions
+"""
 
 import bz2
 import heapq
@@ -12,22 +15,62 @@ from scipy.spatial.distance import cosine
 from joblib import Parallel, delayed
 from collections import OrderedDict, Counter
 from operator import itemgetter
-from tqdm import tqdm
+from tqdm import tqdm, tqdm_notebook
 
 from .utils import Utils
 from .window import WindowWeights
 from .temporary_array import TemporaryArray
 
+
 class svd2vec:
+    """
+    The representation of the documents words in a vector format.
+
+    Parameters
+    ----------
+    documents : list of list of string
+        The list of document, each document being a list of words
+    size : int
+        Maximum numbers of extracted features for each word
+    min_count : int
+        Minimum number of occurence of each word to be included in the model
+    window : int or tuple of ints
+        Window word counts for getting context of words.
+        If an int is given, it's equivalent of a symmetric tuple (int, int).
+    dyn_window_weight : WINDOW_WEIGHT_HARMONIC or WINDOW_WEIGHT_WORD2VEC
+        The window weighing scheme.
+    cds_alpha : float
+        The context distribution smoothing constant that smooths the context
+        frequency
+    neg_k_shift : int
+        The negative PMI log shifting
+    eig_p_weight : float
+        The eigenvalue weighting applied to the eigenvalue matrix
+    nrm_type : string
+        A normalization scheme to use with the L2 normalization
+    sub_threshold : float
+        A threshold for subsampling (diluting very frequent words). Higher value
+        means less words removed.
+    verbose : bool
+        If True, displays progress during the init step
+    workers : int
+        The numbers of workers to use in parallel (should not exceed the
+        available number of cores on the computer)
+    """
+
 
     WINDOW_WEIGHT_HARMONIC = 0
+    """The harmonic weighing scheme for context words *(1/5, 1/4, 1/3, 1/2, ...)*"""
     WINDOW_WEIGHT_WORD2VEC = 1
+    """The word2vec weighing scheme for context words *(1/5, 2/5, 3/5, 4/5, ...)*"""
+
 
     NRM_SCHEME_NONE   = "none"
     NRM_SCHEME_ROW    = "row"
     NRM_SCHEME_COLUMN = "column"
     NRM_SCHEME_BOTH   = "both"
     NRM_SCHEMES = [NRM_SCHEME_NONE, NRM_SCHEME_ROW, NRM_SCHEME_COLUMN, NRM_SCHEME_BOTH]
+    """Available normalization schemes"""
 
     MAX_CPU_CORES = -1
 
@@ -161,14 +204,17 @@ class svd2vec:
 
     def bar(self, yielder=None, desc=None, total=None, offset=0):
         disable = not self.verbose
-        return tqdm(
+        notebook = Utils.running_notebook()
+        func   = tqdm_notebook if notebook else tqdm
+        format = None if notebook else "{desc: <30} {percentage:3.0f}%  {bar}"
+        return func(
             iterable=yielder,
             desc=desc,
             leave=False,
             total=total,
             disable=disable,
             position=offset,
-            bar_format="{desc: <30} {percentage:3.0f}%  {bar}")
+            bar_format=format)
 
     def skipgram_weighted_count_matrix(self):
         file = TemporaryArray((self.vocabulary_len, self.vocabulary_len), np.dtype('float16'))
@@ -271,14 +317,48 @@ class svd2vec:
     #####
 
     def save(self, path):
+        """
+        Saves the svd2vec object to the given path.
+
+        Parameters
+        ----------
+        path : string
+            The file path to write the object to. The directories should exists.
+        """
+
         with bz2.open(path, "wb") as file:
             pickle.dump(self, file)
 
     def load(path):
+        """
+        Load a previously saved svd2vec object from a path.
+
+        Parameters
+        ----------
+        path : string
+            The file path to load the object from.
+
+        Returns
+        -------
+        svd2vec
+            A new `svd2vec` object
+        """
+
         with bz2.open(path, "rb") as file:
             return pickle.load(file)
 
     def save_word2vec_format(self, path):
+        """
+        Saves the word vectors to a path using the same format as word2vec.
+        The file can then be used by other modules or libraries able to load
+        word2vec vectors.
+
+        Parameters
+        ----------
+        path : string
+            The file path to write the object to. The directories should exists.
+        """
+
         with open(path, "w") as f:
             print(str(self.vocabulary_len) + " " + str(self.size), file=f)
             for word in self.vocabulary:
@@ -327,18 +407,95 @@ class svd2vec:
         return top / bot
 
     def similarity(self, x, y):
-        # Returns the similarity of the two words x and y
+        """
+        Computes and returns the cosine similarity of the two given words.
+
+        Parameters
+        ----------
+        x : string
+            The first word to compute the similarity
+        y : string
+            The second word to compute the similarity
+
+        Returns
+        -------
+        float
+            The cosine similarity between the two words
+
+        Warning
+        -------
+        The two words ``x`` and ``y`` should have been trainned during the
+        initialization step.
+        """
+
         wx, cx = self.vectors(x)
         wy, cy = self.vectors(y)
         sim = self.cosine_similarity(wx, cx, wy, cy)
         return sim
 
     def distance(self, x, y):
-        # Returns the cosine distance between the two words x and y
+        """
+        Computes and returns the cosine distance of the two given words.
+
+        Parameters
+        ----------
+        x : string
+            The first word to compute the distance
+        y : string
+            The second word to compute the distance
+
+        Returns
+        -------
+        float
+            The cosine distance between the two words
+
+        Raises
+        ------
+        ValueError
+            If either x or y have not been trained during the initialization step.
+
+        Warning
+        -------
+        The two words ``x`` and ``y`` should have been trained during the
+        initialization step.
+        """
+
         sim = self.similarity(x, y)
         return 1 - sim
 
     def most_similar(self, positive=[], negative=[], topn=10):
+        """
+        Computes and returns the most similar words from those given in positive
+        and negative.
+
+        Parameters
+        ----------
+        positive : list of string
+            Each word in positive will contribute positively to the output words
+        negative : list of string
+            Each word in negative will contribute negatively to the output words
+        topn : int
+            Number of similar words to output
+
+        Returns
+        -------
+        list of ``(word, similarity)``
+            Each tuple is a similar word with it's similarity to the given word.
+
+        Raises
+        ------
+        ValueError
+            If the no input is given in both positive and negative
+        ValueError
+            If some words have not been trained during the initialization step.
+
+        Warning
+        -------
+        The input words should have been trained during the
+        initialization step.
+
+        """
+
         # Output the most similar words for the given positive and negative
         # words. topn limits the number of output words
         if not isinstance(positive, list) or not isinstance(negative, list):
@@ -376,10 +533,39 @@ class svd2vec:
         most_similar = heapq.nlargest(topn, similiarities.items(), key=itemgetter(1))
         return most_similar
 
-    def analogy(self, exampleA, answerA, exampleB):
+    def analogy(self, exampleA, answerA, exampleB, topn=10):
+        """
+        Returns the topn most probable answers to the analogy question "exampleA
+        if to answerA as exampleB is to ?"
+
+        Parameters
+        ----------
+        exampleA : string
+            The first word to "train" the analogy on
+        answerA : string
+            The second word to "train" the analogy on
+        exampleB : string
+            The first word to ask the answer
+
+        Returns
+        -------
+        list of (word, similarity)
+            Each word and similarity is a probable answer to the analogy
+
+        Raises
+        ------
+        ValueError
+            If some words have not been trained during the initialization step.
+
+        Warning
+        -------
+        The three input words should have been trained during the
+        initialization step.
+
+        """
         # returns answerB, ie the answer to the question
         # exampleA is to answerA as exampleB is to answerB
-        return self.most_similar(positive=[exampleB, answerA], negative=[exampleA])
+        return self.most_similar(positive=[exampleB, answerA], negative=[exampleA], topn=topn)
 
     def vectors(self, word):
         if word in self.vocabulary:

@@ -31,3 +31,10 @@ class Utils:
                 size[var] = asizeof.asizeof(inner_obj)
             size["total"] += size[var]
         return size
+
+    def running_notebook():
+        if 'IPython' in sys.modules:
+            from IPython import get_ipython
+            return 'IPKernelApp' in get_ipython().config
+        else:
+            return False
