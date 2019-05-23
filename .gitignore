@@ -3,5 +3,6 @@ __pycache__/
 .ipynb_checkpoints/
 *.binary
 *.word2vec
+*.svd2vec
 text8
 text8.zip

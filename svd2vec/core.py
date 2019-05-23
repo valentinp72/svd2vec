@@ -12,6 +12,7 @@ import multiprocessing
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import svds
 from scipy.spatial.distance import cosine
+from scipy.stats import pearsonr
 from joblib import Parallel, delayed
 from collections import OrderedDict, Counter
 from operator import itemgetter
@@ -102,9 +103,9 @@ class svd2vec:
 
         # window type
         if isinstance(window, int):
-            window = WindowWeights.create_window(left=window, right=window, weighter=window_weighter)
+            window, window_size = WindowWeights.create_window(left=window, right=window, weighter=window_weighter)
         elif isinstance(window, tuple) and len(window) == 2 and all(map(lambda e: isinstance(e, int), window)):
-            window = WindowWeights.create_window(left=window[0], right=window[1], weighter=window_weighter)
+            window, window_size = WindowWeights.create_window(left=window[0], right=window[1], weighter=window_weighter)
         else:
             raise ValueError("'" + window + "' not implemented as a window yielder")
 
@@ -127,6 +128,7 @@ class svd2vec:
         self.min_count     = min_count
         self.size          = size
         self.window        = window
+        self.window_size   = window_size
         self.cds_alpha     = cds_alpha
         self.sub_threshold = sub_threshold
         self.neg_k_shift   = neg_k_shift
@@ -221,7 +223,7 @@ class svd2vec:
         matrix = file.load(erase=True)
 
         for document in self.bar(self.documents, "co-occurence counting"):
-            for word, context, weight in self.bar(self.window(document), "document co-occurence counting", total=self.vocabulary_len * self.vocabulary_len, offset=1):
+            for word, context, weight in self.bar(self.window(document), "document co-occurence counting", total=self.window_size(document), offset=1):
                 i_word    = self.vocabulary[word]
                 i_context = self.vocabulary[context]
                 matrix[i_word, i_context] += weight
@@ -240,6 +242,7 @@ class svd2vec:
         # instance variable will stop us from using joblib parallelisation
         # because this can not be saved as a pickle object
         delattr(self, "window")
+        delattr(self, "window_size")
 
     def pmi_matrix(self):
         # pointwise mutal information
@@ -247,9 +250,6 @@ class svd2vec:
         slices = Utils.split(list(self.vocabulary), self.workers)
         pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice, i) for i, slice in enumerate(slices) if slice != [])
         pmi = np.concatenate(pmi_list, axis=0)
-
-        if self.verbose:
-            print("")
 
         return pmi
 
@@ -400,10 +400,12 @@ class svd2vec:
     def cosine_similarity(self, wx, cx, wy, cy):
         # compute the cosine similarity of x (word x and context x) and y (word
         # y and context y)
-        top = np.dot(wx + cx, wy + cy)
-        bot = np.sqrt(np.dot(wx + cx, wx + cx)) * np.sqrt(np.dot(wy + cy, wy + cy))
-        #top = np.dot(wx, wy) + np.dot(cx, cy) + np.dot(wx, cy) + np.dot(cx, wy)
-        #bot = (2 * np.sqrt(np.dot(wx, cx) + 1)) * (np.sqrt(np.dot(wy, cy) + 1))
+        wxcx = wx + cx
+        wycy = wy + cy
+        top = np.dot(wxcx, wycy)
+        bot = np.sqrt(np.dot(wxcx, wxcx)) * np.sqrt(np.dot(wycy, wycy))
+        # top = np.dot(wx, wy) + np.dot(cx, cy) + np.dot(wx, cy) + np.dot(cx, wy)
+        # bot = (2 * np.sqrt(np.dot(wx, cx) + 1)) * (np.sqrt(np.dot(wy, cy) + 1))
         return top / bot
 
     def similarity(self, x, y):
@@ -506,7 +508,7 @@ class svd2vec:
         positives = [self.vectors(x) for x in positive]
         negatives = [self.vectors(x) for x in negative]
 
-        first_w, first_c = positives[0] if positive else negatives[0]
+        # first_w, first_c = positives[0] if positive else negatives[0]
 
         mean_w = []
         mean_c = []
@@ -575,6 +577,65 @@ class svd2vec:
             return w, c
         else:
             raise ValueError("Word '" + word + "' not in the vocabulary")
+
+    #####
+    # Evaluation
+    #####
+
+    def evaluate_word_pairs(self, pairs, delimiter='\t'):
+        """
+        Evaluates the model similarity using a pairs file of human judgments
+        of similarities.
+
+        Parameters
+        ----------
+        pairs : string
+            A filepath of a csv file. Lines starting by '#' will be ignored.
+            The first and second column are the words. The third column is the
+            human made similarity.
+        delimiter : string
+            The delimiter of the csv file
+
+        Returns
+        -------
+        tuple
+            The first value is the pearson coefficient (1.0 means the model is
+            very good according to humans, 0.0 it's very bad). The second value
+            is the two-tailed p-value.
+
+        """
+        file = Utils.parse_csv(pairs, delimiter)
+        x = []
+        y = []
+        for row in file:
+            w1 = row[0]
+            w2 = row[1]
+            hsim = float(row[2])
+            if w1 not in self.vocabulary or w2 not in self.vocabulary:
+                continue
+            msim = self.similarity(w1, w2)
+            x.append(hsim)
+            y.append(msim)
+        pearson = pearsonr(np.array(x), np.array(y))
+        return pearson
+
+    def evaluate_word_analogies(self, analogies, section_separator=":"):
+        total   = 0
+        correct = 0
+
+        with open(analogies, "r") as file:
+            for line in file.read().splitlines():
+                if line.startswith(section_separator):
+                    continue
+                words = line.split(" ")
+                if any([w not in self.vocabulary for w in words]):
+                    continue
+                total += 1
+                predicted = self.analogy(words[0], words[1], words[2])
+                if predicted == words[3]:
+                    correct += 1
+        result = correct / total
+        return result
 
     #####
     # Debug

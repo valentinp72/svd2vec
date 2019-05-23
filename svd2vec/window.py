@@ -8,17 +8,25 @@ class WindowWeights:
             for iW, word in enumerate(document):
                 for i in reversed(range(1, left)):
                     ictx = iW - i
-                    if ictx <= 0:
-                        break
+                    if ictx < 0:
+                        continue
                     ctx = document[ictx]
                     yield weighter(word, ctx, i, left)
                 for i in range(1, right):
                     ictx = iW + i
                     if ictx >= doc_len:
-                        break
+                        continue
                     ctx = document[ictx]
                     yield weighter(word, ctx, i, right)
-        return window
+
+        def window_size(document):
+            l1 = left - 1
+            r1 = right - 1
+            doc_len = len(document)
+            size = doc_len * (l1 + r1) - (l1 * (l1 + 1)) / 2 - (r1 * (r1 + 1)) / 2
+            return int(size)
+
+        return window, window_size
 
     def weight_harmonic(word, context, dist, windowSize):
         # the harmonic weighing

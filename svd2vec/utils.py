@@ -22,6 +22,8 @@ class Utils:
         return list(a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
 
     def getsize(obj):
+        # Returns the size of the object in bytes (dict for each instance var)
+        # Note: not working well with np.memmap
         size  = {}
         size["total"] = 0
         for var, inner_obj in obj.__dict__.items():
@@ -33,8 +35,21 @@ class Utils:
         return size
 
     def running_notebook():
+        # Returns True if the current code is running in a Jupyter Notebook,
+        # False otherwise
         if 'IPython' in sys.modules:
             from IPython import get_ipython
             return 'IPKernelApp' in get_ipython().config
         else:
             return False
+
+    def parse_csv(file_path, delimiter, comment="#"):
+        # Returns a list of lines, each line being a list of cells
+        output = []
+        with open(file_path, "r") as file:
+            for line in file.read().splitlines():
+                if line[0] == comment:
+                    continue
+                else:
+                    output.append(line.split(delimiter))
+        return output
