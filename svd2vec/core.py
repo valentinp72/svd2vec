@@ -11,12 +11,12 @@ import multiprocessing
 
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import svds
-from scipy.spatial.distance import cosine
 from scipy.stats import pearsonr
 from joblib import Parallel, delayed
 from collections import OrderedDict, Counter
 from operator import itemgetter
 from tqdm import tqdm, tqdm_notebook
+from numba import jit
 
 from .utils import Utils
 from .window import WindowWeights
@@ -168,7 +168,7 @@ class svd2vec:
     #####
 
     def build_vocabulary(self, documents):
-        bar = self.bar(desc="vocabulary building", total=8)
+        bar = self.bar(desc="vocabulary building", total=9)
         self.documents = documents
         bar.update()
         self.all_words = Utils.flatten(self.documents)
@@ -183,7 +183,9 @@ class svd2vec:
         self.terms_counts_cds_powered = {word: np.power(self.terms_counts[word], self.cds_alpha) for word in self.terms_counts}
         bar.update()
 
-        self.vocabulary     = OrderedDict([(w, i) for i, (w, c) in enumerate(self.terms_counts.most_common())])
+        self.vocabulary = OrderedDict([(w, i) for i, (w, c) in enumerate(self.terms_counts.most_common())])
+        bar.update()
+        self.words = list(self.vocabulary.keys())
         bar.update()
         self.vocabulary_len = len(self.vocabulary)
         bar.update()
@@ -207,6 +209,10 @@ class svd2vec:
     def bar(self, yielder=None, desc=None, total=None, offset=0):
         disable = not self.verbose
         notebook = Utils.running_notebook()
+        if notebook and self.verbose:
+            # solves a bug in jupyter notebooks
+            # https://github.com/tqdm/tqdm/issues/485#issuecomment-473338308
+            print('\r ', end='', flush=True)
         func   = tqdm_notebook if notebook else tqdm
         format = None if notebook else "{desc: <30} {percentage:3.0f}%  {bar}"
         return func(
@@ -304,12 +310,12 @@ class svd2vec:
         if nrm_type == svd2vec.NRM_SCHEME_NONE:
             return matrix
         if nrm_type == svd2vec.NRM_SCHEME_ROW:
-            return matrix / np.linalg.norm(matrix, axis=0, keepdims=True)
+            axis = 1 if matrix.ndim is not 1 else 0
+            return matrix / np.linalg.norm(matrix, axis=axis, keepdims=True)
         if nrm_type == svd2vec.NRM_SCHEME_COLUMN:
-            return matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
+            return matrix / np.linalg.norm(matrix, axis=0, keepdims=True)
         if nrm_type == svd2vec.NRM_SCHEME_BOTH:
             return matrix / np.linalg.norm(matrix, keepdims=True)
-            # raise NotImplementedError("Normalization NRM_SCHEME_BOTH not yet implemented")
         raise ValueError("Normalization '" + nrm_type + "' error")
 
     #####
@@ -398,15 +404,17 @@ class svd2vec:
         return np.log(frac)
 
     def cosine_similarity(self, wx, cx, wy, cy):
-        # compute the cosine similarity of x (word x and context x) and y (word
+        # Unused : you should not use the cosine function itself, but the dot
+        # product (since we normalized the vectors, it's the same, but way
+        # faster)
+        # Compute the cosine similarity of x (word x and context x) and y (word
         # y and context y)
         wxcx = wx + cx
         wycy = wy + cy
         top = np.dot(wxcx, wycy)
         bot = np.sqrt(np.dot(wxcx, wxcx)) * np.sqrt(np.dot(wycy, wycy))
-        # top = np.dot(wx, wy) + np.dot(cx, cy) + np.dot(wx, cy) + np.dot(cx, wy)
-        # bot = (2 * np.sqrt(np.dot(wx, cx) + 1)) * (np.sqrt(np.dot(wy, cy) + 1))
         return top / bot
+
 
     def similarity(self, x, y):
         """
@@ -429,10 +437,9 @@ class svd2vec:
         The two words ``x`` and ``y`` should have been trainned during the
         initialization step.
         """
-
-        wx, cx = self.vectors(x)
-        wy, cy = self.vectors(y)
-        sim = self.cosine_similarity(wx, cx, wy, cy)
+        wx = self.vector_w(x)
+        wy = self.vector_w(y)
+        sim = np.dot(wx, wy)
         return sim
 
     def distance(self, x, y):
@@ -505,35 +512,26 @@ class svd2vec:
         if positive == [] and negative == []:
             raise ValueError("Cannot get the most similar words without any positive or negative words")
 
-        positives = [self.vectors(x) for x in positive]
-        negatives = [self.vectors(x) for x in negative]
+        positives_w = [self.vector_w(x) for x in positive]
+        negatives_w = [self.vector_w(x) for x in negative]
 
-        # first_w, first_c = positives[0] if positive else negatives[0]
+        if positive and negative:
+            all_w = np.concatenate([positives_w, -np.array(negatives_w)])
+        elif positive:
+            all_w = np.array(positives_w)
+        elif negative:
+            all_w = np.array(negatives_w)
 
-        mean_w = []
-        mean_c = []
-        for positive_w, positive_c in positives:
-            mean_w.append(positive_w)
-            mean_c.append(positive_c)
-        for negative_w, negative_c in negatives:
-            mean_w.append(-1.0 * negative_w)
-            mean_c.append(-1.0 * negative_c)
+        current_w = self.normalize(all_w.mean(axis=0), self.nrm_type)
 
-        current_w = np.array(mean_w).mean(axis=0)
-        current_c = np.array(mean_c).mean(axis=0)
+        exclude_words = np.concatenate([positive, negative])
 
-        not_to_calc_similiarity = set(positive).union(set(negative))
+        distances = np.dot(self.svd_w, current_w)
+        similarities = np.array([self.words, distances], dtype=object).T
+        sorted   = similarities[(-similarities[:, 1]).argsort()]
+        selected = sorted[~np.in1d(sorted[:, 0], exclude_words)][:topn].tolist()
 
-        similiarities = {}
-        for word in self.vocabulary:
-            if word in not_to_calc_similiarity:
-                continue
-            w, c = self.vectors(word)
-            sim  = self.cosine_similarity(current_w, current_c, w, c)
-            similiarities[word] = sim
-
-        most_similar = heapq.nlargest(topn, similiarities.items(), key=itemgetter(1))
-        return most_similar
+        return selected
 
     def analogy(self, exampleA, answerA, exampleB, topn=10):
         """
@@ -578,6 +576,17 @@ class svd2vec:
         else:
             raise ValueError("Word '" + word + "' not in the vocabulary")
 
+    def vector_w(self, word):
+        return self.get_vector(word, self.svd_w)
+
+    def vector_c(self, word):
+        return self.get_vector(word, self.svd_c)
+
+    def get_vector(self, word, dicti):
+        if word in self.vocabulary:
+            i_word = self.vocabulary[word]
+            return dicti[i_word]
+
     #####
     # Evaluation
     #####
@@ -620,22 +629,24 @@ class svd2vec:
         return pearson
 
     def evaluate_word_analogies(self, analogies, section_separator=":"):
-        total   = 0
-        correct = 0
 
+        selected_analogies = []
         with open(analogies, "r") as file:
             for line in file.read().splitlines():
                 if line.startswith(section_separator):
                     continue
-                words = line.split(" ")
+                words = line.lower().split(" ")
                 if any([w not in self.vocabulary for w in words]):
                     continue
-                total += 1
-                predicted = self.analogy(words[0], words[1], words[2])
-                if predicted == words[3]:
-                    correct += 1
-        result = correct / total
-        return result
+                selected_analogies.append(words)
+
+        total   = len(selected_analogies)
+        correct = 0
+
+        for w1, w2, w3, w4 in self.bar(selected_analogies, "analogies computing"):
+            if self.analogy(w1, w2, w3, topn=1)[0][0] == w4:
+                correct += 1
+        return (1.0 * correct) / total
 
     #####
     # Debug
