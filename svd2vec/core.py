@@ -3,7 +3,6 @@
 """
 
 import bz2
-import heapq
 import pickle
 import numpy as np
 import pandas as pd
@@ -14,9 +13,7 @@ from scipy.sparse.linalg import svds
 from scipy.stats import pearsonr
 from joblib import Parallel, delayed
 from collections import OrderedDict, Counter
-from operator import itemgetter
 from tqdm import tqdm, tqdm_notebook
-from numba import jit
 
 from .utils import Utils
 from .window import WindowWeights
@@ -86,7 +83,7 @@ class svd2vec:
                  eig_p_weight=0,
                  nrm_type=NRM_SCHEME_ROW,
                  sub_threshold=1e-5,
-                 verbose=True,
+                 verbose=False,
                  workers=MAX_CPU_CORES):
 
         # -------------
