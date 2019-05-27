@@ -19,7 +19,13 @@ class Utils:
     def split(a, n):
         # Split the array a into n evenly sized chunks
         k, m = divmod(len(a), n)
-        return list(a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
+        for i in range(n):
+            yield a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)]
+
+    def chunks(l, n):
+        # Split the array into multiple arrays of size n
+        for i in range(0, len(l), n):
+            yield l[i:i + n]
 
     def getsize(obj):
         # Returns the size of the object in bytes (dict for each instance var)

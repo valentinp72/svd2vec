@@ -192,7 +192,7 @@ class svd2vec:
         new_docs = []
         for document in self.bar(self.documents, "document subsampling"):
             new_words = []
-            for word in self.bar(document, "word subsampling", offset=1):
+            for word in document:
                 if self.terms_counts[word] < self.min_count:
                     continue
                 word_frequency = 1.0 * self.terms_counts[word] / self.d_size
@@ -203,13 +203,13 @@ class svd2vec:
             new_docs.append(new_words)
         self.build_vocabulary(new_docs)
 
-    def bar(self, yielder=None, desc=None, total=None, offset=0):
+    def bar(self, yielder=None, desc=None, total=None, offset=0, parallel=False):
         disable = not self.verbose
         notebook = Utils.running_notebook()
-        if notebook and self.verbose:
+        if notebook and self.verbose and parallel:
             # solves a bug in jupyter notebooks
             # https://github.com/tqdm/tqdm/issues/485#issuecomment-473338308
-            print('\r ', end='', flush=True)
+            print('\r', end='', flush=True)
         func   = tqdm_notebook if notebook else tqdm
         format = None if notebook else "{desc: <30} {percentage:3.0f}%  {bar}"
         return func(
@@ -226,7 +226,7 @@ class svd2vec:
         matrix = file.load(erase=True)
 
         for document in self.bar(self.documents, "co-occurence counting"):
-            for word, context, weight in self.bar(self.window(document), "document co-occurence counting", total=self.window_size(document), offset=1):
+            for word, context, weight in self.window(document):
                 i_word    = self.vocabulary[word]
                 i_context = self.vocabulary[context]
                 matrix[i_word, i_context] += weight
@@ -263,7 +263,7 @@ class svd2vec:
         self.weighted_count_matrix = self.weighted_count_matrix_file.load(size=len(slice), start=self.weighted_count_matrix_offset)
 
         name = "pmi " + str(i + 1) + " / " + str(self.workers)
-        for i_word, word in enumerate(self.bar(slice, desc=name, offset=i)):
+        for i_word, word in enumerate(self.bar(slice, desc=name, offset=i, parallel=True)):
             for context in self.vocabulary:
                 i_context = self.vocabulary[context]
                 pmi[i_word, i_context] = self.pmi(word, context)
@@ -583,6 +583,8 @@ class svd2vec:
         if word in self.vocabulary:
             i_word = self.vocabulary[word]
             return dicti[i_word]
+        else:
+            raise ValueError("Word '" + word + "' not in the vocabulary")
 
     #####
     # Evaluation
@@ -630,7 +632,7 @@ class svd2vec:
         selected_analogies = []
         with open(analogies, "r") as file:
             for line in file.read().splitlines():
-                if line.startswith(section_separator):
+                if line.startswith(section_separator) or line.startswith('#'):
                     continue
                 words = line.lower().split(" ")
                 if any([w not in self.vocabulary for w in words]):
