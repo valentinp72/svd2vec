@@ -17,7 +17,7 @@ from tqdm import tqdm, tqdm_notebook
 
 from .utils import Utils
 from .window import WindowWeights
-from .temporary_array import TemporaryArray
+from .temporary_array import TemporaryArray, NamedArray
 
 
 class svd2vec:
@@ -251,14 +251,24 @@ class svd2vec:
         # pointwise mutal information
 
         slices = Utils.split(list(self.vocabulary), self.workers)
-        pmi_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice, i) for i, slice in enumerate(slices) if slice != [])
+        pmi_name_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice, i) for i, slice in enumerate(slices) if slice != [])
+
+        pmi_array_list = [NamedArray.from_name(array) for array in pmi_name_list]
+        pmi_list = [named_array.get_matrix() for named_array in pmi_array_list]
+
         pmi = np.concatenate(pmi_list, axis=0)
+
+        del pmi_list
+        [named_array.delete() for named_array in pmi_array_list]
 
         return pmi
 
     def pmi_parallized(self, slice, i):
         # returns a small matrix corresponding to the slice of words given (rows)
-        pmi = np.zeros((len(slice), self.vocabulary_len))
+        # python processing api does not works with big arrays, so we store the array to the disk and we return it's name
+        array = NamedArray.new_one(shape=(len(slice), self.vocabulary_len), dtype=np.dtype('float64'))
+        pmi   = array.get_matrix()
+
         self.weighted_count_matrix_offset = self.vocabulary[slice[0]]
         self.weighted_count_matrix = self.weighted_count_matrix_file.load(size=len(slice), start=self.weighted_count_matrix_offset)
 
@@ -268,8 +278,11 @@ class svd2vec:
                 i_context = self.vocabulary[context]
                 pmi[i_word, i_context] = self.pmi(word, context)
 
+        pmi.flush()
+        del pmi
         del self.weighted_count_matrix
-        return pmi
+
+        return array.name
 
     def ppmi_matrix(self, pmi):
         # positive pointwise mutal information
@@ -476,8 +489,9 @@ class svd2vec:
 
         Parameters
         ----------
-        positive : list of string
+        positive : list of string or string
             Each word in positive will contribute positively to the output words
+            A single word can also be passed to compute it's most similar words.
         negative : list of string
             Each word in negative will contribute negatively to the output words
         topn : int
@@ -504,6 +518,8 @@ class svd2vec:
 
         # Output the most similar words for the given positive and negative
         # words. topn limits the number of output words
+        if isinstance(positive, str):
+            positive = [positive]
         if not isinstance(positive, list) or not isinstance(negative, list):
             raise ValueError("Positive and Negative should be a list of words inside the vocabulary")
         if positive == [] and negative == []:
