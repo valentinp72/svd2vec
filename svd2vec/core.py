@@ -259,7 +259,6 @@ class svd2vec:
 
         [named_array.delete() for named_array in pmi_array_list]
 
-        input("wait")
         return pmi
 
     def pmi_parallized(self, slice, i):
@@ -393,12 +392,12 @@ class svd2vec:
 
         p_wc = n_wc / self.d_size
         p_w  = n_w  / self.d_size
-        p_c  = n_c_powered 
+        p_c  = n_c_powered
 
         frac = p_wc / (p_w * p_c)
 
         if frac == 0:
-            return None  # should in theory be -np.inf
+            return None  # should in theory be -np.inf, but we're doing the PPMI directly 
         return np.log(frac)
 
     def cosine_similarity(self, wx, cx, wy, cy):
