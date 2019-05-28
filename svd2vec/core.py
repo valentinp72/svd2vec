@@ -177,7 +177,7 @@ class svd2vec:
 
         self.terms_counts = Counter(self.all_words)
         bar.update()
-        self.terms_counts_cds_powered = {word: np.power(self.terms_counts[word], self.cds_alpha) for word in self.terms_counts}
+        self.terms_counts_cds_powered = {word: np.power(self.terms_counts[word], self.cds_alpha) / self.d_size_cds_power for word in self.terms_counts}
         bar.update()
 
         self.vocabulary = OrderedDict([(w, i) for i, (w, c) in enumerate(self.terms_counts.most_common())])
@@ -385,27 +385,14 @@ class svd2vec:
     # Getting informations
     #####
 
-    def weight_count_term(self, term, cds_power=False):
-        if cds_power:
-            count_term = self.terms_counts_cds_powered[term]
-        else:
-            count_term = self.terms_counts[term]
-        return count_term
-
-    def weight_count_term_term(self, t1, t2):
-        i_t1 = self.vocabulary[t1] - self.weighted_count_matrix_offset
-        i_t2 = self.vocabulary[t2]
-        weighted_count = self.weighted_count_matrix[i_t1, i_t2]
-        return weighted_count
-
     def pmi(self, word, context):
-        n_wc = self.weight_count_term_term(word, context)
-        n_w  = self.weight_count_term(word)
-        n_c_powered = self.weight_count_term(context, cds_power=True)
+        n_wc = self.weighted_count_matrix[self.vocabulary[word] - self.weighted_count_matrix_offset, self.vocabulary[context]]
+        n_w  = self.terms_counts[word]
+        n_c_powered = self.terms_counts_cds_powered[context]
 
         p_wc = n_wc / self.d_size
         p_w  = n_w  / self.d_size
-        p_c  = n_c_powered / self.d_size_cds_power
+        p_c  = n_c_powered  # already divided by self.d_size_cds_power
 
         frac = p_wc / (p_w * p_c)
 
