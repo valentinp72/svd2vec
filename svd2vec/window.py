@@ -6,18 +6,10 @@ class WindowWeights:
         def window(document):
             doc_len = len(document)
             for iW, word in enumerate(document):
-                for i in reversed(range(1, left)):
-                    ictx = iW - i
-                    if ictx < 0:
-                        continue
-                    ctx = document[ictx]
-                    yield weighter(word, ctx, i, left)
-                for i in range(1, right):
-                    ictx = iW + i
-                    if ictx >= doc_len:
-                        continue
-                    ctx = document[ictx]
-                    yield weighter(word, ctx, i, right)
+                for i in reversed(range(1, min(left, iW + 1))):
+                    yield weighter(word, document[iW - i], i, left)
+                for i in range(1, min(right, doc_len - iW)):
+                    yield weighter(word, document[iW + i], i, right)
 
         def window_size(document):
             l1 = left - 1

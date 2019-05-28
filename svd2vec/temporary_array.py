@@ -1,6 +1,10 @@
 
 import os
 import numpy as np
+
+from scipy.sparse import csr_matrix, coo_matrix, dok_matrix
+from scipy.sparse import save_npz, load_npz
+
 import tempfile
 
 class TemporaryArray:
@@ -29,13 +33,13 @@ class TemporaryArray:
         os.remove(self.file_name)
 
 
-class NamedArray:
+class NamedSparseArray:
 
     def __init__(self):
         pass
 
     def new_one(shape, dtype):
-        instance = NamedArray()
+        instance = NamedSparseArray()
         instance.shape = shape
         instance.dtype = dtype
 
@@ -43,28 +47,32 @@ class NamedArray:
         sdtype = str(dtype)
         instance.name  = tempfile.NamedTemporaryFile().name + '_' + sshape + '_' + sdtype
 
-        m = np.memmap(instance.name, shape=shape, dtype=dtype, mode='w+')
-        m.flush()
-        del m
+        instance.m = dok_matrix(shape, dtype=dtype)
+        instance.save()
 
         return instance
 
     def from_name(name):
 
-        if not os.path.isfile(name):
+        if not os.path.isfile(name + '.npz'):
             raise ValueError("File name '" + name + "' does not exists.")
 
-        instance = NamedArray()
+        instance = NamedSparseArray()
         instance.name = name
 
         splitted = name.split('_')
         instance.dtype = np.dtype(splitted[-1])
         instance.shape = (int(splitted[-3]), int(splitted[-2]))
 
+        instance.m = load_npz(instance.name + ".npz").todok()
+
         return instance
 
     def get_matrix(self):
-        return np.memmap(self.name, shape=self.shape, dtype=self.dtype, mode='r+')
+        return self.m
+
+    def save(self):
+        save_npz(self.name + ".npz", self.m.tocoo(), compressed=True)
 
     def delete(self):
-        os.remove(self.name)
+        os.remove(self.name + ".npz")

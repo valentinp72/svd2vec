@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import multiprocessing
 
-from scipy.sparse import csc_matrix
+from scipy.sparse import vstack
 from scipy.sparse.linalg import svds
 from scipy.stats import pearsonr
 from joblib import Parallel, delayed
@@ -17,7 +17,7 @@ from tqdm import tqdm, tqdm_notebook
 
 from .utils import Utils
 from .window import WindowWeights
-from .temporary_array import TemporaryArray, NamedArray
+from .temporary_array import TemporaryArray, NamedSparseArray
 
 
 class svd2vec:
@@ -145,7 +145,7 @@ class svd2vec:
         # ---------------
         # pmi computation
         # ---------------
-        self.pmi = self.sparse_pmi_matrix(self.sppmi_matrix(self.pmi_matrix()))
+        self.pmi = self.sppmi_matrix(self.pmi_matrix())
 
         # ---------------
         # svd computation
@@ -172,12 +172,12 @@ class svd2vec:
         bar.update()
         self.d_size    = len(self.all_words)
         bar.update()
-        self.d_size_cds_power = np.power(self.d_size, self.cds_alpha)
-        bar.update()
 
         self.terms_counts = Counter(self.all_words)
         bar.update()
-        self.terms_counts_cds_powered = {word: np.power(self.terms_counts[word], self.cds_alpha) / self.d_size_cds_power for word in self.terms_counts}
+        self.d_alpha = np.sum(np.power([self.terms_counts[c] for c in self.terms_counts], self.cds_alpha))
+        bar.update()
+        self.terms_counts_cds_powered = {word: self.d_alpha / np.power(self.terms_counts[word], self.cds_alpha) for word in self.terms_counts}
         bar.update()
 
         self.vocabulary = OrderedDict([(w, i) for i, (w, c) in enumerate(self.terms_counts.most_common())])
@@ -190,7 +190,7 @@ class svd2vec:
 
     def subsampling(self):
         new_docs = []
-        for document in self.bar(self.documents, "document subsampling"):
+        for document in self.bar(self.documents, "subsampling"):
             new_words = []
             for word in document:
                 if self.terms_counts[word] < self.min_count:
@@ -225,11 +225,12 @@ class svd2vec:
         file = TemporaryArray((self.vocabulary_len, self.vocabulary_len), np.dtype('float16'))
         matrix = file.load(erase=True)
 
-        for document in self.bar(self.documents, "co-occurence counting"):
+        for document in self.bar(self.documents, "co-occurence"):
             for word, context, weight in self.window(document):
-                i_word    = self.vocabulary[word]
-                i_context = self.vocabulary[context]
-                matrix[i_word, i_context] += weight
+                # i_word    = self.vocabulary[word]
+                # i_context = self.vocabulary[context]
+                # matrix[i_word, i_context] += weight
+                matrix[self.vocabulary[word], self.vocabulary[context]] += weight
 
         matrix.flush()
         del matrix
@@ -251,55 +252,55 @@ class svd2vec:
         # pointwise mutal information
 
         slices = Utils.split(list(self.vocabulary), self.workers)
-        pmi_name_list = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice, i) for i, slice in enumerate(slices) if slice != [])
+        pmi_name_list  = Parallel(n_jobs=self.workers)(delayed(self.pmi_parallized)(slice, i) for i, slice in enumerate(slices) if slice != [])
+        pmi_array_list = [NamedSparseArray.from_name(array) for array in pmi_name_list]
 
-        pmi_array_list = [NamedArray.from_name(array) for array in pmi_name_list]
-        pmi_list = [named_array.get_matrix() for named_array in pmi_array_list]
+        pmi = vstack([named_array.get_matrix() for named_array in pmi_array_list])
 
-        pmi = np.concatenate(pmi_list, axis=0)
-
-        del pmi_list
         [named_array.delete() for named_array in pmi_array_list]
 
+        input("wait")
         return pmi
 
     def pmi_parallized(self, slice, i):
         # returns a small matrix corresponding to the slice of words given (rows)
         # python processing api does not works with big arrays, so we store the array to the disk and we return it's name
-        array = NamedArray.new_one(shape=(len(slice), self.vocabulary_len), dtype=np.dtype('float64'))
+        array = NamedSparseArray.new_one(shape=(len(slice), self.vocabulary_len), dtype=np.dtype('float64'))
         pmi   = array.get_matrix()
 
         self.weighted_count_matrix_offset = self.vocabulary[slice[0]]
         self.weighted_count_matrix = self.weighted_count_matrix_file.load(size=len(slice), start=self.weighted_count_matrix_offset)
 
         name = "pmi " + str(i + 1) + " / " + str(self.workers)
+
         for i_word, word in enumerate(self.bar(slice, desc=name, offset=i, parallel=True)):
             for context in self.vocabulary:
                 i_context = self.vocabulary[context]
-                pmi[i_word, i_context] = self.pmi(word, context)
 
-        pmi.flush()
-        del pmi
+                n_wc = self.weighted_count_matrix[self.vocabulary[word] - self.weighted_count_matrix_offset, self.vocabulary[context]]
+                n_w  = self.terms_counts[word]
+                n_c_powered = self.terms_counts_cds_powered[context]
+
+                if n_wc == 0:
+                    continue
+
+                frac = n_wc / (n_w * n_c_powered)
+
+                pmi[i_word, i_context] = np.log(frac)
+
+        array.save()
         del self.weighted_count_matrix
 
         return array.name
 
-    def ppmi_matrix(self, pmi):
-        # positive pointwise mutal information
-        zero = np.zeros(pmi.shape)
-        return np.maximum(pmi, zero)
-
     def sppmi_matrix(self, pmi):
         # shifted positive pointwise mutal information
-        spmi = pmi - np.log(self.neg_k_shift)
-        return self.ppmi_matrix(spmi)
-
-    def sparse_pmi_matrix(self, pmi):
-        sparsed = csc_matrix(pmi)
-        return sparsed
+        shift = np.log(self.neg_k_shift)
+        pmi.data = np.array([v - shift for v in pmi.data])
+        return pmi
 
     def svd(self):
-        bar = self.bar(desc="singular value decomposition", total=5)
+        bar = self.bar(desc="svd", total=5)
         modified_k = min(self.size, self.pmi.shape[0] - 1)
         bar.update()
         u, s, v = svds(self.pmi, k=modified_k)
@@ -378,7 +379,7 @@ class svd2vec:
         with open(path, "w") as f:
             print(str(self.vocabulary_len) + " " + str(self.size), file=f)
             for word in self.vocabulary:
-                values = " ".join(["{:.6f}".format(e) for e in self.vectors(word)[0]])
+                values = " ".join(["{:.6f}".format(e) for e in self.vector_w(word)])
                 print(word + " " + values, file=f)
 
     #####
@@ -392,12 +393,12 @@ class svd2vec:
 
         p_wc = n_wc / self.d_size
         p_w  = n_w  / self.d_size
-        p_c  = n_c_powered  # already divided by self.d_size_cds_power
+        p_c  = n_c_powered 
 
         frac = p_wc / (p_w * p_c)
 
         if frac == 0:
-            return -np.inf
+            return None  # should in theory be -np.inf
         return np.log(frac)
 
     def cosine_similarity(self, wx, cx, wy, cy):
