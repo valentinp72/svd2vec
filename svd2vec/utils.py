@@ -2,6 +2,7 @@
 import sys
 import random
 import numpy as np
+from scipy import stats
 
 import cProfile
 import pstats
@@ -85,3 +86,13 @@ class Utils:
                 return result
 
         return profiled_func
+
+    def confidence_pearson(x, y, alpha=0.05):
+        # thanks to https://zhiyzuo.github.io/Pearson-Correlation-CI-in-Python/
+        r, p = stats.pearsonr(x, y)
+        r_z = np.arctanh(r)
+        se = 1 / np.sqrt(x.size - 3)
+        z = stats.norm.ppf(1 - alpha / 2)
+        lo_z, hi_z = r_z - z * se, r_z + z * se
+        lo, hi = np.tanh((lo_z, hi_z))
+        return lo, hi

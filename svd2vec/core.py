@@ -627,8 +627,8 @@ class svd2vec:
             msim = self.similarity(w1, w2)
             x.append(hsim)
             y.append(msim)
-        pearson = pearsonr(np.array(x), np.array(y))
-        return pearson
+        pearson, p_value, low, high = Utils.confidence_pearson(np.array(x), np.array(y))
+        return pearson, p_value, (low, high)
 
     def evaluate_word_analogies(self, analogies, section_separator=":"):
 
