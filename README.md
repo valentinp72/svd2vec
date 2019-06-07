@@ -4,6 +4,8 @@ SVD2vec is a python library for representing documents words as vectors. Vectors
 
 This library implements recommendations from "Improving Distributional Similarity with Lessons Learned from Word Embeddings" (Omer Levy, Yoav Goldberg, and Ido Dagan). This papers suggests that traditional methods like PMI and SVD can be as good as word2vec by appling the same hyperparameters.
 
+Documentation can be found at [https://valentinp72.github.io/svd2vec/index.html](https://valentinp72.github.io/svd2vec/index.html)
+
 ### Example
 
 ```shell
