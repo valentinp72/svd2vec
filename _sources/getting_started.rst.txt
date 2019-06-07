@@ -4,4 +4,4 @@ Getting started with svd2vec
 ============================
 
 .. raw:: html
-    :file: notebook.html
+    :file: notebook_getting_started.html
