@@ -10,4 +10,5 @@ text8
 text8.zip
 dist/
 build/
+!docs/build/
 svd2vec.egg-info/
