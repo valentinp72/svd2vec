@@ -25,6 +25,8 @@ can be as good as word2vec by appling the same hyperparameters.
    :caption: Contents:
 
    getting_started
+   effect_corpus_size
+   gensim_comparison
    svd2vec
 
 Indices and tables

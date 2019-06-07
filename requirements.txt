@@ -1,0 +1,7 @@
+Pympler == 0.7
+joblib == 0.11
+numpy == 1.16.4
+pandas == 0.24.2
+scipy == 1.0.0
+setuptools == 20.7.0
+tqdm == 4.19.6

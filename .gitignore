@@ -4,5 +4,10 @@ __pycache__/
 *.binary
 *.word2vec
 *.svd2vec
+*.svd
+*.w2v
 text8
 text8.zip
+dist/
+build/
+svd2vec.egg-info/

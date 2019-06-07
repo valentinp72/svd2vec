@@ -91,8 +91,8 @@ class Utils:
         # thanks to https://zhiyzuo.github.io/Pearson-Correlation-CI-in-Python/
         r, p = stats.pearsonr(x, y)
         r_z = np.arctanh(r)
-        se = 1 / np.sqrt(x.size - 3)
+        se = 1 / np.sqrt(np.array(x).size - 3)
         z = stats.norm.ppf(1 - alpha / 2)
         lo_z, hi_z = r_z - z * se, r_z + z * se
         lo, hi = np.tanh((lo_z, hi_z))
-        return lo, hi
+        return r, p, lo, hi

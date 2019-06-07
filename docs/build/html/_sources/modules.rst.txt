@@ -1,7 +1,0 @@
-svd2vec
-=======
-
-.. toctree::
-   :maxdepth: 4
-
-   svd2vec
