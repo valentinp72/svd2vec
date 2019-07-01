@@ -79,7 +79,7 @@ class svd2vec:
                  window=10,
                  dyn_window_weight=WINDOW_WEIGHT_WORD2VEC,
                  cds_alpha=0.75,
-                 neg_k_shift=5,
+                 neg_k_shift=1,
                  eig_p_weight=0,
                  nrm_type=NRM_SCHEME_ROW,
                  sub_threshold=1e-5,
