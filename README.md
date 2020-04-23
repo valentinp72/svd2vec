@@ -6,6 +6,12 @@ This library implements recommendations from "Improving Distributional Similarit
 
 Documentation can be found at [https://valentinp72.github.io/svd2vec/index.html](https://valentinp72.github.io/svd2vec/index.html)
 
+### Installation
+
+```shell
+pip install svd2vec
+```
+
 ### Example
 
 ```shell
