@@ -7,7 +7,7 @@ with open("requirements.txt", "r") as f:
     required = f.read().splitlines()
 
 setup(name='svd2vec',
-      version='0.3.1',
+      version='0.3.2',
       description='A library that converts words to vectors using PMI and SVD',
       long_description=long_description,
       long_description_content_type="text/markdown",
