@@ -48,11 +48,23 @@ class Utils:
     def running_notebook():
         # Returns True if the current code is running in a Jupyter Notebook,
         # False otherwise
-        if 'IPython' in sys.modules:
-            from IPython import get_ipython
-            return 'IPKernelApp' in get_ipython().config
-        else:
-            return False
+        # if 'IPython' in sys.modules:
+        #     from IPython import get_ipython
+        #     return 'IPKernelApp' in get_ipython().config
+        # else:
+        #     return False
+
+        # from https://stackoverflow.com/a/39662359
+        try:
+            shell = get_ipython().__class__.__name__
+            if shell == 'ZMQInteractiveShell':
+                return True   # Jupyter notebook or qtconsole
+            elif shell == 'TerminalInteractiveShell':
+                return False  # Terminal running IPython
+            else:
+                return False  # Other type (?)
+        except NameError:
+            return False      # Probably standard Python interpreter
 
     def parse_csv(file_path, delimiter, comment="#"):
         # Returns a list of lines, each line being a list of cells
