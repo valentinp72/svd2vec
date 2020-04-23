@@ -13,7 +13,7 @@ from scipy.sparse.linalg import svds
 from scipy.stats import pearsonr
 from joblib import Parallel, delayed
 from collections import OrderedDict, Counter
-from tqdm import tqdm, tqdm_notebook
+from tqdm import tqdm, notebook 
 
 from .utils import Utils
 from .window import WindowWeights
@@ -210,8 +210,8 @@ class svd2vec:
             # solves a bug in jupyter notebooks
             # https://github.com/tqdm/tqdm/issues/485#issuecomment-473338308
             print('\r', end='', flush=True)
-        func   = tqdm_notebook if notebook else tqdm
-        format = None if notebook else "{desc: <30} {percentage:3.0f}%  {bar}"
+        func   = notebook.tqdm_notebook if notebook else tqdm
+        format = "{desc: <30} {percentage:3.0f}%  {bar}"
         return func(
             iterable=yielder,
             desc=desc,
