@@ -196,8 +196,8 @@ class svd2vec:
                 if self.terms_counts[word] < self.min_count:
                     continue
                 word_frequency = 1.0 * self.terms_counts[word] / self.d_size
-                prob = 1 - np.sqrt(self.sub_threshold / word_frequency)
-                if not Utils.random_decision(prob):
+                prob = np.sqrt(self.sub_threshold / word_frequency)
+                if Utils.random_decision(prob):
                     # we keep the word
                     new_words.append(word)
             new_docs.append(new_words)
