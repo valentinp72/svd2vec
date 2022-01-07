@@ -177,7 +177,7 @@ class svd2vec:
         bar.update()
         self.d_alpha = np.sum(np.power([self.terms_counts[c] for c in self.terms_counts], self.cds_alpha))
         bar.update()
-        self.terms_counts_cds_powered = {word: self.d_alpha / np.power(self.terms_counts[word], self.cds_alpha) for word in self.terms_counts}
+        self.terms_counts_cds_powered = {word: np.power(self.terms_counts[word], self.cds_alpha) / self.d_alpha  for word in self.terms_counts}
         bar.update()
 
         self.vocabulary = OrderedDict([(w, i) for i, (w, c) in enumerate(self.terms_counts.most_common())])
